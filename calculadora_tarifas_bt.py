@@ -1,0 +1,436 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+Calculadora de Tarifas Eléctricas en Baja Tensión (BT) y NetBilling (Inyección de Energía) - Chile
+Permite calcular el gasto mensual en suministro y el abono por inyección solar o autogeneración
+para clientes regulados en Baja Tensión (BT1, BT2, BT3, BT4.1, BT4.2, BT4.3).
+"""
+
+import sys
+import os
+import json
+import argparse
+from typing import Dict, Any, Optional
+
+# Configurar salida UTF-8 para consola en Windows
+if sys.stdout.encoding and sys.stdout.encoding.lower() != 'utf-8':
+    try:
+        sys.stdout.reconfigure(encoding='utf-8')
+    except Exception:
+        pass
+
+DB_FILE = os.path.join(os.path.dirname(__file__), "informacion_tarifas", "datos_tarifarios_bt.json")
+
+# Valores promedio de referencia por defecto si no se encuentra la comuna
+DEFAULT_TARIFAS = {
+    "empresa": "Referencia Nacional (CNE / Regulado)",
+    "cargo_fijo_bt1": 1150.0,
+    "transmision": 29.50,
+    "serv_publico": 0.855,
+    "energia_bt1": 155.00,
+    "potencia_punta_bt2_bt3": 25500.0,
+    "potencia_fuera_punta_bt2_bt3": 17500.0,
+    "cargo_fijo_bt4": 1150.0,
+    "potencia_punta_bt4": 20200.0,
+    "potencia_demanda_bt4": 5250.0,
+    "inyeccion_bt": 103.50
+}
+
+def cargar_base_datos() -> Dict[str, Any]:
+    if os.path.exists(DB_FILE):
+        try:
+            with open(DB_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception as e:
+            print(f"[!] Advertencia: No se pudo leer {DB_FILE} ({e}). Usando valores de referencia.")
+    return {}
+
+def formatear_clp(monto: float) -> str:
+    """Formatea un número decimal a formato moneda chilena ($ X.XXX)."""
+    return f"${round(monto):,}".replace(",", ".")
+
+def pedir_float(mensaje: str, default: Optional[float] = None, minimo: float = 0.0) -> float:
+    while True:
+        prompt = f"{mensaje} "
+        if default is not None:
+            prompt += f"[{default}]: "
+        else:
+            prompt += ": "
+        try:
+            val_str = input(prompt).strip()
+            if not val_str and default is not None:
+                return default
+            val = float(val_str.replace(",", "."))
+            if val < minimo:
+                print(f"  [!] El valor debe ser mayor o igual a {minimo}.")
+                continue
+            return val
+        except ValueError:
+            print("  [!] Por favor ingrese un número válido.")
+
+def pedir_int(mensaje: str, default: Optional[int] = None, minimo: int = 1, maximo: int = 12) -> int:
+    while True:
+        prompt = f"{mensaje} "
+        if default is not None:
+            prompt += f"[{default}]: "
+        else:
+            prompt += ": "
+        try:
+            val_str = input(prompt).strip()
+            if not val_str and default is not None:
+                return default
+            val = int(val_str)
+            if val < minimo or val > maximo:
+                print(f"  [!] El valor debe estar entre {minimo} y {maximo}.")
+                continue
+            return val
+        except ValueError:
+            print("  [!] Por favor ingrese un número entero válido.")
+
+def seleccionar_zona(db: Dict[str, Any], zona_arg: Optional[str] = None) -> tuple[str, Dict[str, Any]]:
+    if zona_arg:
+        # Búsqueda insensible a mayúsculas
+        for k, v in db.items():
+            if k.lower() == zona_arg.lower():
+                return k, v
+        # Búsqueda parcial
+        for k, v in db.items():
+            if zona_arg.lower() in k.lower():
+                return k, v
+        print(f"[!] Zona '{zona_arg}' no encontrada en la base de datos. Se usarán valores de referencia nacional.")
+        return zona_arg, DEFAULT_TARIFAS
+
+    print("\n" + "="*70)
+    print(" 1. SELECCIÓN DE ZONA / COMUNA")
+    print("="*70)
+    print("Seleccione una comuna o zona representativa de Chile:")
+    comunas_destacadas = [
+        "Santiago (Enel RM)",
+        "Buin",
+        "Calera de Tango",
+        "Valparaíso (Chilquinta)",
+        "Rancagua",
+        "Talca",
+        "Chillán",
+        "Concepción",
+        "Temuco",
+        "La Serena",
+        "Buscar otra comuna en la base de datos (120+ comunas)",
+        "Ingresar zona personalizada"
+    ]
+    
+    for idx, c in enumerate(comunas_destacadas, 1):
+        print(f"  [{idx:2d}] {c}")
+    
+    opc = pedir_int("Seleccione una opción", default=1, minimo=1, maximo=len(comunas_destacadas))
+    
+    if opc <= 10:
+        c_sel = comunas_destacadas[opc - 1]
+        if c_sel in db:
+            return c_sel, db[c_sel]
+        # Buscar en db si existe sin paréntesis
+        for k, v in db.items():
+            if c_sel.split()[0].lower() in k.lower():
+                return k, v
+        return c_sel, DEFAULT_TARIFAS
+    
+    elif opc == 11:
+        # Búsqueda en db
+        while True:
+            busq = input("\nIngrese nombre o parte de la comuna a buscar: ").strip().lower()
+            coincidencias = [k for k in db.keys() if busq in k.lower()]
+            if not coincidencias:
+                print("  [!] No se encontraron comunas con ese texto. Intente nuevamente.")
+                continue
+            print(f"\nCoincidencias encontradas ({len(coincidencias)}):")
+            for i, c in enumerate(coincidencias[:15], 1):
+                print(f"  [{i:2d}] {c} ({db[c].get('empresa', 'Distribuidora')})")
+            elec = pedir_int("Seleccione la comuna deseada", default=1, minimo=1, maximo=min(len(coincidencias), 15))
+            c_sel = coincidencias[elec - 1]
+            return c_sel, db[c_sel]
+    else:
+        nombre = input("Ingrese el nombre de su zona/comuna: ").strip() or "Zona Personalizada"
+        return nombre, DEFAULT_TARIFAS
+
+def seleccionar_tarifa(tarifa_arg: Optional[str] = None) -> str:
+    tarifas_disponibles = {
+        "1": ("BT1", "Residencial y pequeño comercio simple (potencia <= 10 kW, solo mide kWh)"),
+        "2": ("BT2", "Comercial / Alumbrado (potencia contratada fija en kW)"),
+        "3": ("BT3", "Pymes y comercios (demanda máxima de potencia leída en el mes)"),
+        "4": ("BT4.1", "Horaria - Potencia contratada en horas punta y contratada fuera de punta"),
+        "5": ("BT4.2", "Horaria - Demanda máxima leída en horas punta y contratada fuera de punta"),
+        "6": ("BT4.3", "Horaria - Demanda máxima leída en horas punta y suministrada general")
+    }
+
+    if tarifa_arg:
+        t_norm = tarifa_arg.upper().replace("-", "").replace(" ", "")
+        for _, (cod, _) in tarifas_disponibles.items():
+            if cod.upper() == t_norm or cod.upper().replace(".", "") == t_norm:
+                return cod
+        print(f"[!] Tarifa '{tarifa_arg}' no reconocida. Elija de la lista.")
+
+    print("\n" + "="*70)
+    print(" 2. SELECCIÓN DE OPCIÓN TARIFARIA EN BAJA TENSIÓN (BT)")
+    print("="*70)
+    for k, (cod, desc) in tarifas_disponibles.items():
+        print(f"  [{k}] {cod:6s} : {desc}")
+    
+    opc = str(pedir_int("Seleccione la opción tarifaria", default=1, minimo=1, maximo=6))
+    return tarifas_disponibles[opc][0]
+
+def solicitar_variables(tarifa: str) -> Dict[str, float]:
+    print("\n" + "="*70)
+    print(f" 3. VARIABLES DE CONSUMO E INYECCIÓN - TARIFA {tarifa}")
+    print("="*70)
+    datos = {}
+    
+    # 1. Consumo de energía
+    datos["consumo_kwh"] = pedir_float("Consumo total de energía del mes (kWh)", default=220.0, minimo=0.0)
+    
+    # Variables específicas por tarifa
+    if tarifa == "BT1":
+        print("\n  [Configuración de Invierno - Límite de Invierno]")
+        mes = pedir_int("Mes de facturación (1=Enero, ..., 12=Diciembre)", default=10, minimo=1, maximo=12)
+        datos["mes"] = mes
+        es_invierno = mes in [5, 6, 7, 8, 9] # Mayo a Septiembre
+        datos["es_invierno"] = es_invierno
+        
+        if es_invierno and datos["consumo_kwh"] > 350.0:
+            print("  -> El mes consultado corresponde al periodo de punta/invierno y el consumo supera 350 kWh.")
+            limite = pedir_float("Límite de invierno asignado en su boleta (kWh)", default=350.0, minimo=350.0)
+            datos["limite_invierno"] = limite
+        else:
+            datos["limite_invierno"] = 0.0
+
+    elif tarifa == "BT2":
+        datos["potencia_contratada_kw"] = pedir_float("Potencia contratada mensual (kW)", default=15.0, minimo=0.0)
+
+    elif tarifa == "BT3":
+        datos["demanda_maxima_kw"] = pedir_float("Demanda máxima leída registrada en el mes (kW)", default=12.0, minimo=0.0)
+
+    elif tarifa == "BT4.1":
+        datos["potencia_punta_kw"] = pedir_float("Potencia contratada en horas de punta (kW)", default=8.0, minimo=0.0)
+        datos["potencia_fuera_punta_kw"] = pedir_float("Potencia contratada fuera de punta / total (kW)", default=15.0, minimo=0.0)
+
+    elif tarifa == "BT4.2":
+        datos["potencia_punta_kw"] = pedir_float("Demanda máxima leída en horas de punta (kW)", default=7.5, minimo=0.0)
+        datos["potencia_fuera_punta_kw"] = pedir_float("Potencia contratada fuera de punta / total (kW)", default=15.0, minimo=0.0)
+
+    elif tarifa == "BT4.3":
+        datos["potencia_punta_kw"] = pedir_float("Demanda máxima leída en horas de punta (kW)", default=7.0, minimo=0.0)
+        datos["potencia_suministrada_kw"] = pedir_float("Demanda máxima suministrada general (kW)", default=14.0, minimo=0.0)
+
+    # Inyección de energía (NetBilling - Ley 20.571)
+    print("\n  [Inyección de Energía / NetBilling - Autogeneración Solar]")
+    datos["inyeccion_kwh"] = pedir_float("Energía inyectada a la red en el mes (kWh excedentes)", default=0.0, minimo=0.0)
+    
+    return datos
+
+def calcular_facturacion(zona_nombre: str, parametros: Dict[str, Any], tarifa: str, variables: Dict[str, Any]) -> Dict[str, Any]:
+    consumo_kwh = variables.get("consumo_kwh", 0.0)
+    inyeccion_kwh = variables.get("inyeccion_kwh", 0.0)
+    
+    # Parámetros tarifarios
+    cargo_fijo = parametros.get("cargo_fijo_bt1", 1150.0)
+    transmision_unit = parametros.get("transmision", 29.50)
+    serv_publico_unit = parametros.get("serv_publico", 0.855)
+    energia_unit = parametros.get("energia_bt1", 155.00)
+    inyeccion_unit = parametros.get("inyeccion_bt", 103.50)
+    
+    # 1. Cargos de Energía y Transmisión
+    costo_transmision = consumo_kwh * transmision_unit
+    costo_serv_publico = consumo_kwh * serv_publico_unit
+    
+    costo_energia_base = 0.0
+    costo_sobreconsumo_invierno = 0.0
+    costo_potencia = 0.0
+    detalle_potencia = ""
+    
+    if tarifa == "BT1":
+        limite = variables.get("limite_invierno", 0.0)
+        if variables.get("es_invierno", False) and limite > 0 and consumo_kwh > limite:
+            kwh_base = limite
+            kwh_exceso = consumo_kwh - limite
+            costo_energia_base = kwh_base * energia_unit
+            # El sobreconsumo de invierno tiene un recargo por potencia de punta implícita (~60% adicional)
+            costo_sobreconsumo_invierno = kwh_exceso * (energia_unit * 1.55)
+        else:
+            costo_energia_base = consumo_kwh * energia_unit
+
+    elif tarifa == "BT2":
+        costo_energia_base = consumo_kwh * energia_unit
+        p_contratada = variables.get("potencia_contratada_kw", 0.0)
+        precio_pot = parametros.get("potencia_fuera_punta_bt2_bt3", 17985.5)
+        costo_potencia = p_contratada * precio_pot
+        detalle_potencia = f"Potencia contratada: {p_contratada:.2f} kW × {formatear_clp(precio_pot)}/kW"
+
+    elif tarifa == "BT3":
+        costo_energia_base = consumo_kwh * energia_unit
+        p_leida = variables.get("demanda_maxima_kw", 0.0)
+        precio_pot = parametros.get("potencia_punta_bt2_bt3", 25744.3)
+        costo_potencia = p_leida * precio_pot
+        detalle_potencia = f"Demanda máxima leída: {p_leida:.2f} kW × {formatear_clp(precio_pot)}/kW"
+
+    elif tarifa in ["BT4.1", "BT4.2"]:
+        cargo_fijo = parametros.get("cargo_fijo_bt4", cargo_fijo)
+        costo_energia_base = consumo_kwh * energia_unit
+        p_punta = variables.get("potencia_punta_kw", 0.0)
+        p_fuera = variables.get("potencia_fuera_punta_kw", 0.0)
+        precio_punta = parametros.get("potencia_punta_bt4", 20416.6)
+        precio_fuera = parametros.get("potencia_demanda_bt4", 5327.7)
+        costo_pot_punta = p_punta * precio_punta
+        costo_pot_fuera = p_fuera * precio_fuera
+        costo_potencia = costo_pot_punta + costo_pot_fuera
+        detalle_potencia = (f"Punta ({p_punta:.2f} kW × {formatear_clp(precio_punta)}) + "
+                            f"Fuera Punta ({p_fuera:.2f} kW × {formatear_clp(precio_fuera)})")
+
+    elif tarifa == "BT4.3":
+        cargo_fijo = parametros.get("cargo_fijo_bt4", cargo_fijo)
+        costo_energia_base = consumo_kwh * energia_unit
+        p_punta = variables.get("potencia_punta_kw", 0.0)
+        p_sum = variables.get("potencia_suministrada_kw", 0.0)
+        precio_punta = parametros.get("potencia_punta_bt4", 20416.6)
+        precio_sum = parametros.get("potencia_demanda_bt4", 5327.7)
+        costo_pot_punta = p_punta * precio_punta
+        costo_pot_sum = p_sum * precio_sum
+        costo_potencia = costo_pot_punta + costo_pot_sum
+        detalle_potencia = (f"Punta ({p_punta:.2f} kW × {formatear_clp(precio_punta)}) + "
+                            f"Suministrada ({p_sum:.2f} kW × {formatear_clp(precio_sum)})")
+
+    # En los pliegos de tarifas chilenos los precios ya incluyen el 19% de IVA excepto el Cargo por Servicio Público
+    # Total de gasto en suministro
+    total_consumo = (cargo_fijo + costo_transmision + costo_serv_publico + 
+                     costo_energia_base + costo_sobreconsumo_invierno + costo_potencia)
+
+    # 2. Inyección de Energía (NetBilling - Ley 20.571)
+    # Por ley (Art 149 quinquies DFL 4), la remuneración de inyecciones residenciales NO está afecta a IVA
+    total_inyeccion = inyeccion_kwh * inyeccion_unit
+
+    # 3. Balance Neto
+    balance_neto = total_consumo - total_inyeccion
+
+    return {
+        "zona": zona_nombre,
+        "empresa": parametros.get("empresa", "Distribuidora"),
+        "tarifa": tarifa,
+        "consumo_kwh": consumo_kwh,
+        "cargo_fijo": cargo_fijo,
+        "costo_transmision": costo_transmision,
+        "costo_serv_publico": costo_serv_publico,
+        "costo_energia_base": costo_energia_base,
+        "costo_sobreconsumo_invierno": costo_sobreconsumo_invierno,
+        "costo_potencia": costo_potencia,
+        "detalle_potencia": detalle_potencia,
+        "total_consumo": total_consumo,
+        "inyeccion_kwh": inyeccion_kwh,
+        "precio_inyeccion_unit": inyeccion_unit,
+        "total_inyeccion": total_inyeccion,
+        "balance_neto": balance_neto
+    }
+
+def imprimir_reporte(res: Dict[str, Any]):
+    print("\n" + "="*70)
+    print("                RESULTADOS DEL BALANCE ELÉCTRICO MENSUAL")
+    print("="*70)
+    print(f" Zona / Comuna     : {res['zona']} ({res['empresa']})")
+    print(f" Opción Tarifaria  : {res['tarifa']} (Baja Tensión)")
+    print(f" Consumo Facturado : {res['consumo_kwh']:.2f} kWh")
+    if res['inyeccion_kwh'] > 0:
+        print(f" Inyección Solar   : {res['inyeccion_kwh']:.2f} kWh (NetBilling)")
+    print("-" * 70)
+    print(" 1. DESGLOSE DEL GASTO EN CONSUMO DE ENERGÍA")
+    print("-" * 70)
+    print(f"  * Cargo Fijo Mensual                       : {formatear_clp(res['cargo_fijo'])}")
+    print(f"  * Cargo por Transmisión                    : {formatear_clp(res['costo_transmision'])}")
+    print(f"  * Cargo por Servicio Público               : {formatear_clp(res['costo_serv_publico'])}")
+    print(f"  * Cargo por Energía Consumida              : {formatear_clp(res['costo_energia_base'])}")
+    if res['costo_sobreconsumo_invierno'] > 0:
+        print(f"  * Recargo Límite de Invierno (Sobreconsumo): {formatear_clp(res['costo_sobreconsumo_invierno'])}")
+    if res['costo_potencia'] > 0:
+        print(f"  * Cargo por Demanda de Potencia            : {formatear_clp(res['costo_potencia'])}")
+        print(f"    ({res['detalle_potencia']})")
+    print("    " + "-"*40)
+    print(f"  >> TOTAL A PAGAR POR CONSUMO (con IVA)    : {formatear_clp(res['total_consumo'])}")
+
+    print("\n" + "-" * 70)
+    print(" 2. LIQUIDACIÓN POR INYECCIÓN DE ENERGÍA (Ley 20.571 NetBilling)")
+    print("-" * 70)
+    if res['inyeccion_kwh'] > 0:
+        print(f"  * Energía Inyectada a la Red               : {res['inyeccion_kwh']:.2f} kWh")
+        print(f"  * Precio de Inyección Regulado (sin IVA)   : ${res['precio_inyeccion_unit']:.3f} /kWh")
+        print(f"  >> TOTAL ABONADO POR DISTRIBUIDORA         : {formatear_clp(res['total_inyeccion'])}")
+    else:
+        print("  * No se registraron inyecciones a la red en el periodo (0 kWh).")
+        print("  >> TOTAL ABONADO                           : $0")
+
+    print("\n" + "=" * 70)
+    print(" 3. BALANCE FINAL A PAGAR EN LA BOLETA")
+    print("=" * 70)
+    balance = res['balance_neto']
+    if balance > 0:
+        print(f"  TOTAL NETO A PAGAR POR EL CLIENTE         : {formatear_clp(balance)}")
+        if res['total_inyeccion'] > 0:
+            ahorro_pct = (res['total_inyeccion'] / res['total_consumo']) * 100
+            print(f"  [Ahorro obtenido gracias a inyección solar: {ahorro_pct:.1f}% de la cuenta]")
+    elif balance < 0:
+        print(f"  SALDO A FAVOR DEL CLIENTE (REMANENTE)     : {formatear_clp(abs(balance))}")
+        print("  [Este saldo a favor se descontará en la siguiente boleta o se devolverá según contrato]")
+    else:
+        print("  TOTAL NETO A PAGAR                        : $0 (Consumo completamente compensado)")
+    print("=" * 70 + "\n")
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Calculadora de Tarifas Eléctricas en Baja Tensión y NetBilling (Chile)"
+    )
+    parser.add_argument("--zona", type=str, help="Nombre de la comuna o zona (ej: Buin, Santiago, Concepción)")
+    parser.add_argument("--tarifa", type=str, choices=["BT1", "BT2", "BT3", "BT4.1", "BT4.2", "BT4.3"], help="Opción tarifaria")
+    parser.add_argument("--consumo", type=float, help="Consumo de energía mensual en kWh")
+    parser.add_argument("--inyeccion", type=float, default=0.0, help="Inyección de energía a la red en kWh")
+    parser.add_argument("--mes", type=int, default=10, help="Mes de facturación (1-12) para evaluar invierno en BT1")
+    parser.add_argument("--limite-invierno", type=float, default=0.0, help="Límite de invierno en kWh si aplica")
+    parser.add_argument("--potencia", type=float, help="Potencia contratada o leída en kW para BT2/BT3")
+    parser.add_argument("--potencia-punta", type=float, help="Potencia en horas punta para BT4 (kW)")
+    parser.add_argument("--potencia-fuera", type=float, help="Potencia fuera de punta para BT4 (kW)")
+
+    args = parser.parse_args()
+    db = cargar_base_datos()
+
+    # Si se especificaron los argumentos mínimos requeridos, corre en modo silencioso/directo
+    if args.zona and args.tarifa and (args.consumo is not None):
+        zona_nombre, params = seleccionar_zona(db, args.zona)
+        variables = {
+            "consumo_kwh": args.consumo,
+            "inyeccion_kwh": args.inyeccion,
+            "mes": args.mes,
+            "es_invierno": args.mes in [5, 6, 7, 8, 9],
+            "limite_invierno": args.limite_invierno
+        }
+        if args.tarifa == "BT2":
+            variables["potencia_contratada_kw"] = args.potencia or 10.0
+        elif args.tarifa == "BT3":
+            variables["demanda_maxima_kw"] = args.potencia or 10.0
+        elif args.tarifa in ["BT4.1", "BT4.2", "BT4.3"]:
+            variables["potencia_punta_kw"] = args.potencia_punta or 5.0
+            variables["potencia_fuera_punta_kw"] = args.potencia_fuera or 10.0
+            variables["potencia_suministrada_kw"] = args.potencia_fuera or 10.0
+
+        res = calcular_facturacion(zona_nombre, params, args.tarifa, variables)
+        imprimir_reporte(res)
+        return
+
+    # Modo Interactivo
+    print("\n" + "#"*70)
+    print("   CALCULADORA DE TARIFAS ELÉCTRICAS EN BAJA TENSIÓN Y NETBILLING")
+    print("                 Sector Regulado de Distribución - Chile")
+    print("#"*70)
+
+    zona_nombre, params = seleccionar_zona(db)
+    tarifa = seleccionar_tarifa()
+    variables = solicitar_variables(tarifa)
+
+    res = calcular_facturacion(zona_nombre, params, tarifa, variables)
+    imprimir_reporte(res)
+
+if __name__ == "__main__":
+    main()
