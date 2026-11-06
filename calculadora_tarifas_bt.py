@@ -19,6 +19,9 @@ if sys.stdout.encoding and sys.stdout.encoding.lower() != 'utf-8':
     except Exception:
         pass
 
+from datetime import datetime
+from actualizador_tarifas import asegurar_tarifas_al_dia, obtener_metadatos_locales
+
 DB_FILE = os.path.join(os.path.dirname(__file__), "informacion_tarifas", "datos_tarifarios_bt.json")
 
 # Valores promedio de referencia por defecto si no se encuentra la comuna
@@ -36,13 +39,18 @@ DEFAULT_TARIFAS = {
     "inyeccion_bt": 103.50
 }
 
-def cargar_base_datos() -> Dict[str, Any]:
-    if os.path.exists(DB_FILE):
-        try:
-            with open(DB_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except Exception as e:
-            print(f"[!] Advertencia: No se pudo leer {DB_FILE} ({e}). Usando valores de referencia.")
+def cargar_base_datos(mes_objetivo: Optional[int] = None, anio_objetivo: Optional[int] = None, forzar: bool = False) -> Dict[str, Any]:
+    """Carga los datos locales o se conecta a internet para descargar la última versión si hace falta."""
+    try:
+        return asegurar_tarifas_al_dia(mes_objetivo=mes_objetivo, anio_objetivo=anio_objetivo, forzar=forzar)
+    except Exception as e:
+        print(f"[!] Advertencia al verificar tarifas ({e}).")
+        if os.path.exists(DB_FILE):
+            try:
+                with open(DB_FILE, "r", encoding="utf-8") as f:
+                    return json.load(f)
+            except Exception:
+                pass
     return {}
 
 def formatear_clp(monto: float) -> str:
@@ -88,17 +96,25 @@ def pedir_int(mensaje: str, default: Optional[int] = None, minimo: int = 1, maxi
             print("  [!] Por favor ingrese un número entero válido.")
 
 def seleccionar_zona(db: Dict[str, Any], zona_arg: Optional[str] = None) -> tuple[str, Dict[str, Any]]:
+    vigencia = db.get("_metadata", {}).get("vigencia_texto", "Octubre 2026")
+    def enriquecer(p: Dict[str, Any]) -> Dict[str, Any]:
+        res = dict(p)
+        res["vigencia_texto"] = vigencia
+        return res
+
     if zona_arg:
         # Búsqueda insensible a mayúsculas
         for k, v in db.items():
+            if k == "_metadata": continue
             if k.lower() == zona_arg.lower():
-                return k, v
+                return k, enriquecer(v)
         # Búsqueda parcial
         for k, v in db.items():
+            if k == "_metadata": continue
             if zona_arg.lower() in k.lower():
-                return k, v
+                return k, enriquecer(v)
         print(f"[!] Zona '{zona_arg}' no encontrada en la base de datos. Se usarán valores de referencia nacional.")
-        return zona_arg, DEFAULT_TARIFAS
+        return zona_arg, enriquecer(DEFAULT_TARIFAS)
 
     print("\n" + "="*70)
     print(" 1. SELECCIÓN DE ZONA / COMUNA")
@@ -127,18 +143,19 @@ def seleccionar_zona(db: Dict[str, Any], zona_arg: Optional[str] = None) -> tupl
     if opc <= 10:
         c_sel = comunas_destacadas[opc - 1]
         if c_sel in db:
-            return c_sel, db[c_sel]
+            return c_sel, enriquecer(db[c_sel])
         # Buscar en db si existe sin paréntesis
         for k, v in db.items():
+            if k == "_metadata": continue
             if c_sel.split()[0].lower() in k.lower():
-                return k, v
-        return c_sel, DEFAULT_TARIFAS
+                return k, enriquecer(v)
+        return c_sel, enriquecer(DEFAULT_TARIFAS)
     
     elif opc == 11:
         # Búsqueda en db
         while True:
             busq = input("\nIngrese nombre o parte de la comuna a buscar: ").strip().lower()
-            coincidencias = [k for k in db.keys() if busq in k.lower()]
+            coincidencias = [k for k in db.keys() if k != "_metadata" and busq in k.lower()]
             if not coincidencias:
                 print("  [!] No se encontraron comunas con ese texto. Intente nuevamente.")
                 continue
@@ -147,10 +164,10 @@ def seleccionar_zona(db: Dict[str, Any], zona_arg: Optional[str] = None) -> tupl
                 print(f"  [{i:2d}] {c} ({db[c].get('empresa', 'Distribuidora')})")
             elec = pedir_int("Seleccione la comuna deseada", default=1, minimo=1, maximo=min(len(coincidencias), 15))
             c_sel = coincidencias[elec - 1]
-            return c_sel, db[c_sel]
+            return c_sel, enriquecer(db[c_sel])
     else:
         nombre = input("Ingrese el nombre de su zona/comuna: ").strip() or "Zona Personalizada"
-        return nombre, DEFAULT_TARIFAS
+        return nombre, enriquecer(DEFAULT_TARIFAS)
 
 def seleccionar_tarifa(tarifa_arg: Optional[str] = None) -> str:
     tarifas_disponibles = {
@@ -309,9 +326,17 @@ def calcular_facturacion(zona_nombre: str, parametros: Dict[str, Any], tarifa: s
     # 3. Balance Neto
     balance_neto = total_consumo - total_inyeccion
 
+    # Metadatos de vigencia
+    vigencia_texto = parametros.get("vigencia_texto")
+    if not vigencia_texto:
+        # Buscar en metadata general si está disponible
+        meta = parametros.get("_metadata", {})
+        vigencia_texto = meta.get("vigencia_texto", "Octubre 2026")
+
     return {
         "zona": zona_nombre,
         "empresa": parametros.get("empresa", "Distribuidora"),
+        "vigencia_texto": vigencia_texto,
         "tarifa": tarifa,
         "consumo_kwh": consumo_kwh,
         "cargo_fijo": cargo_fijo,
@@ -334,6 +359,8 @@ def imprimir_reporte(res: Dict[str, Any]):
     print("="*70)
     print(f" Zona / Comuna     : {res['zona']} ({res['empresa']})")
     print(f" Opción Tarifaria  : {res['tarifa']} (Baja Tensión)")
+    if res.get('vigencia_texto'):
+        print(f" Vigencia Precios  : {res['vigencia_texto']} (Pliego oficial CGE / CNE)")
     print(f" Consumo Facturado : {res['consumo_kwh']:.2f} kWh")
     if res['inyeccion_kwh'] > 0:
         print(f" Inyección Solar   : {res['inyeccion_kwh']:.2f} kWh (NetBilling)")
@@ -392,9 +419,12 @@ def main():
     parser.add_argument("--potencia", type=float, help="Potencia contratada o leída en kW para BT2/BT3")
     parser.add_argument("--potencia-punta", type=float, help="Potencia en horas punta para BT4 (kW)")
     parser.add_argument("--potencia-fuera", type=float, help="Potencia fuera de punta para BT4 (kW)")
+    parser.add_argument("--actualizar", action="store_true", help="Fuerza la conexión a internet para descargar el último pliego publicado")
 
     args = parser.parse_args()
-    db = cargar_base_datos()
+    
+    # Cargar o actualizar automáticamente según el mes en ejecución
+    db = cargar_base_datos(mes_objetivo=args.mes, forzar=args.actualizar)
 
     # Si se especificaron los argumentos mínimos requeridos, corre en modo silencioso/directo
     if args.zona and args.tarifa and (args.consumo is not None):

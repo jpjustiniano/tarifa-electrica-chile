@@ -921,5 +921,13 @@
     "potencia_punta_bt4": 20100.0,
     "potencia_demanda_bt4": 5250.0,
     "inyeccion_bt": 104.2
+  },
+  "_metadata": {
+    "anio_vigencia": 2026,
+    "mes_vigencia": 10,
+    "vigencia_texto": "Octubre 2026",
+    "fecha_actualizacion": "2026-11-05T22:56:43.713688",
+    "fuente_pdf": "Tarifas-CGE-vigentes-octubre-2026.pdf",
+    "url_fuente": "https://www.cge.cl/wp-content/uploads/2026/10/Tarifas-de-Suministro-Electrico-vigentes-a-partir-del-1-de-octubre-2026.pdf"
   }
 }
