@@ -8,6 +8,18 @@ cuando los datos locales no coinciden con el mes/año en curso o solicitado.
 
 import os
 import sys
+
+# Auto-despacho al entorno virtual .venv si existe y no está activo
+_VENV_PY = os.path.join(os.path.dirname(__file__), ".venv", "Scripts", "python.exe")
+if os.path.exists(_VENV_PY):
+    _curr_py = os.path.abspath(sys.executable).lower()
+    _target_py = os.path.abspath(_VENV_PY).lower()
+    if _curr_py != _target_py and not os.environ.get("_ANTIGRAVITY_VENV_ACTIVE"):
+        import subprocess
+        _env = os.environ.copy()
+        _env["_ANTIGRAVITY_VENV_ACTIVE"] = "1"
+        sys.exit(subprocess.call([_VENV_PY] + sys.argv, env=_env))
+
 import re
 import json
 import ssl

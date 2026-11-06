@@ -8,9 +8,21 @@ para clientes regulados en Baja Tensión (BT1, BT2, BT3, BT4.1, BT4.2, BT4.3).
 
 import sys
 import os
+
+# Auto-despacho al entorno virtual .venv si existe y no está activo
+_VENV_PY = os.path.join(os.path.dirname(__file__), ".venv", "Scripts", "python.exe")
+if os.path.exists(_VENV_PY):
+    _curr_py = os.path.abspath(sys.executable).lower()
+    _target_py = os.path.abspath(_VENV_PY).lower()
+    if _curr_py != _target_py and not os.environ.get("_ANTIGRAVITY_VENV_ACTIVE"):
+        import subprocess
+        _env = os.environ.copy()
+        _env["_ANTIGRAVITY_VENV_ACTIVE"] = "1"
+        sys.exit(subprocess.call([_VENV_PY] + sys.argv, env=_env))
+
 import json
 import argparse
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 
 # Configurar salida UTF-8 para consola en Windows
 if sys.stdout.encoding and sys.stdout.encoding.lower() != 'utf-8':
@@ -18,6 +30,15 @@ if sys.stdout.encoding and sys.stdout.encoding.lower() != 'utf-8':
         sys.stdout.reconfigure(encoding='utf-8')
     except Exception:
         pass
+
+# Importar prompt_toolkit para autocompletado profesional de terminal
+try:
+    from prompt_toolkit import prompt as pt_prompt
+    from prompt_toolkit.completion import WordCompleter, FuzzyCompleter
+    from prompt_toolkit.styles import Style as PtStyle
+    PT_DISPONIBLE = True
+except ImportError:
+    PT_DISPONIBLE = False
 
 from datetime import datetime
 from actualizador_tarifas import asegurar_tarifas_al_dia, obtener_metadatos_locales
@@ -95,17 +116,17 @@ def pedir_int(mensaje: str, default: Optional[int] = None, minimo: int = 1, maxi
         except ValueError:
             print("  [!] Por favor ingrese un número entero válido.")
 
-def input_con_autocompletado(opciones: List[str], prompt: str = "Comuna: ", default: str = "") -> str:
+def input_con_autocompletado(opciones: List[str], prompt_text: str = "Comuna: ", default: str = "") -> str:
     """
-    Solicita entrada de texto con autocompletado interactivo en tiempo real (TAB y sugerencias).
-    Compatible con Windows (msvcrt) y con modo fallback automático para scripts o pipes.
+    Solicita entrada de texto con autocompletado profesional interactivo en tiempo real (TAB y menú desplegable).
+    Utiliza prompt_toolkit (con FuzzyCompleter) para una experiencia óptima en Windows Terminal, PowerShell y CMD,
+    con fallback tolerante a fallos si el entorno no dispone de búfer de pantalla o en pipes.
     """
-    # Fallback si no hay terminal interactiva (ej: piping de comandos o pruebas)
+    # 1. Modo no interactivo / Pipe
     if not sys.stdin.isatty():
-        resp = input(prompt).strip()
+        resp = input(prompt_text).strip()
         if not resp and default:
             return default
-        # Coincidencia directa o parcial
         for opc in opciones:
             if opc.lower() == resp.lower():
                 return opc
@@ -117,105 +138,49 @@ def input_con_autocompletado(opciones: List[str], prompt: str = "Comuna: ", defa
             return contienen[0]
         return resp or default
 
-    # En Windows interactivo con msvcrt
-    try:
-        import msvcrt
-        buffer = []
-        matches = list(opciones)
-        tab_index = 0
+    # 2. Modo Interactivo con prompt_toolkit (Recomendado y Profesional)
+    if PT_DISPONIBLE:
+        try:
+            # Estilo moderno para el menú emergente de autocompletado
+            estilo = PtStyle.from_dict({
+                'completion-menu.completion': 'bg:#2c3e50 #ecf0f1',
+                'completion-menu.completion.current': 'bg:#2980b9 #ffffff bold',
+                'scrollbar.background': 'bg:#7f8c8d',
+                'scrollbar.button': 'bg:#34495e',
+                'prompt': '#27ae60 bold',
+            })
+            
+            # FuzzyCompleter permite coincidencia difusa (ej: 'buin', 'stgo', 'colb', 'conce')
+            completer = FuzzyCompleter(WordCompleter(opciones, ignore_case=True, match_middle=True))
+            
+            # Mostrar instrucción amigable
+            print("\n  [Tip: Escriba letras y aparecerá el menú emergente. Presione TAB o Flechas para elegir]")
+            resultado = pt_prompt(
+                prompt_text,
+                completer=completer,
+                complete_while_typing=True,
+                style=estilo,
+                default=default
+            ).strip()
 
-        print(prompt, end='', flush=True)
+            if not resultado and default:
+                return default
+            return resultado
+        except Exception:
+            # Fallback en caso de terminales sin soporte de búfer de pantalla Win32
+            pass
 
-        while True:
-            ch = msvcrt.getwch()
-
-            # Enter
-            if ch in ('\r', '\n'):
-                texto = "".join(buffer).strip()
-                print()
-                if not texto:
-                    if default:
-                        return default
-                    if matches:
-                        return matches[0]
-                    continue
-                for opc in opciones:
-                    if opc.lower() == texto.lower():
-                        return opc
-                if matches:
-                    return matches[0]
-                return texto
-
-            # Ctrl+C
-            elif ch == '\x03':
-                print()
-                raise KeyboardInterrupt
-
-            # Backspace
-            elif ch in ('\x08', '\x7f'):
-                if buffer:
-                    buffer.pop()
-                    tab_index = 0
-
-            # Tab: Autocompletar o alternar sugerencias
-            elif ch == '\t':
-                if matches:
-                    seleccion = matches[tab_index % len(matches)]
-                    buffer = list(seleccion)
-                    tab_index += 1
-
-            # Teclas especiales (flechas del teclado)
-            elif ch in ('\x00', '\xe0'):
-                tecla = msvcrt.getwch()
-                if tecla == 'H':  # Flecha Arriba
-                    if matches:
-                        tab_index = (tab_index - 1) % len(matches)
-                        buffer = list(matches[tab_index])
-                elif tecla == 'P':  # Flecha Abajo
-                    if matches:
-                        tab_index = (tab_index + 1) % len(matches)
-                        buffer = list(matches[tab_index])
-                continue
-
-            # Caracteres imprimibles
-            elif ch.isprintable():
-                buffer.append(ch)
-                tab_index = 0
-
-            # Recalcular coincidencias en tiempo real
-            curr_text = "".join(buffer).lower()
-            if curr_text:
-                inician = [o for o in opciones if o.lower().startswith(curr_text)]
-                contienen = [o for o in opciones if curr_text in o.lower() and o not in inician]
-                matches = inician + contienen
-            else:
-                matches = list(opciones)
-
-            # Redibujar la línea con sugerencias dinámicas
-            linea = f"\r{prompt}{''.join(buffer)}"
-            if matches and curr_text:
-                sugs = " | ".join(matches[:4])
-                if len(matches) > 4:
-                    sugs += f" (+{len(matches)-4} más)"
-                linea += f"  \033[90m[TAB: {sugs}]\033[0m"
-
-            linea_limpia = linea.ljust(95)
-            sys.stdout.write(linea_limpia)
-            sys.stdout.write(f"\r{prompt}{''.join(buffer)}")
-            sys.stdout.flush()
-
-    except Exception:
-        # Fallback genérico con input estándar
-        resp = input(f"{prompt}").strip()
-        if not resp and default:
-            return default
-        for opc in opciones:
-            if opc.lower() == resp.lower():
-                return opc
-        matches = [o for o in opciones if resp.lower() in o.lower()]
-        if matches:
-            return matches[0]
-        return resp
+    # 3. Fallback con input estándar y búsqueda aproximada
+    resp = input(f"{prompt_text}[{default}]: ").strip()
+    if not resp and default:
+        return default
+    for opc in opciones:
+        if opc.lower() == resp.lower():
+            return opc
+    matches = [o for o in opciones if resp.lower() in o.lower()]
+    if matches:
+        return matches[0]
+    return resp
 
 def seleccionar_zona(db: Dict[str, Any], zona_arg: Optional[str] = None) -> tuple[str, Dict[str, Any]]:
     vigencia = db.get("_metadata", {}).get("vigencia_texto", "Octubre 2026")
@@ -266,7 +231,7 @@ def seleccionar_zona(db: Dict[str, Any], zona_arg: Optional[str] = None) -> tupl
 
     entrada = input_con_autocompletado(
         lista_autocompletado,
-        prompt="\nComuna o N° [1]: ",
+        prompt_text="\nComuna o N° [1]: ",
         default="1"
     ).strip()
 
@@ -284,7 +249,7 @@ def seleccionar_zona(db: Dict[str, Any], zona_arg: Optional[str] = None) -> tupl
             return c_sel, enriquecer(DEFAULT_TARIFAS)
         elif num == 11:
             print("\n  [Modo Autocompletado Activo - Escriba letras y presione TAB para autocompletar]")
-            c_sel = input_con_autocompletado(todas_las_comunas, prompt="Comuna (TAB para autocompletar): ", default="Santiago (Enel RM)")
+            c_sel = input_con_autocompletado(todas_las_comunas, prompt_text="Comuna (TAB para autocompletar): ", default="Santiago (Enel RM)")
             if c_sel in db:
                 return c_sel, enriquecer(db[c_sel])
             for k, v in db.items():
