@@ -6,6 +6,7 @@ Herramienta de línea de comandos para calcular el **gasto mensual en electricid
 
 ## 1. Características Principales
 
+* **Autocompletado Interactivo en Tiempo Real**: Al seleccionar la comuna, el usuario puede comenzar a escribir letras y presionar la tecla **`TAB`** para autocompletar automáticamente el nombre o alternar entre sugerencias coincidentes en vivo en la consola.
 * **Actualización Automática por Internet**: Si en el mes en que se ejecuta no se cuenta con los precios vigentes de ese mes o posteriores, el programa se conecta a la web de CGE/CNE, rastrea el pliego oficial más reciente publicado, descarga el PDF y actualiza automáticamente la base de datos de precios.
 * **Base de datos real integrada**: Incluye más de 70 comunas reguladas de Chile (con datos extraídos del pliego oficial de CGE, Enel RM y Chilquinta), tales como Santiago, Buin, Calera de Tango, Concepción, Chillán, Rancagua, Talca, etc.
 * **Cobertura completa de opciones en Baja Tensión ($\le 400\text{ V}$)**:

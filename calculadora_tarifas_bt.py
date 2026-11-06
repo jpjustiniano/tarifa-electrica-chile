@@ -95,6 +95,128 @@ def pedir_int(mensaje: str, default: Optional[int] = None, minimo: int = 1, maxi
         except ValueError:
             print("  [!] Por favor ingrese un número entero válido.")
 
+def input_con_autocompletado(opciones: List[str], prompt: str = "Comuna: ", default: str = "") -> str:
+    """
+    Solicita entrada de texto con autocompletado interactivo en tiempo real (TAB y sugerencias).
+    Compatible con Windows (msvcrt) y con modo fallback automático para scripts o pipes.
+    """
+    # Fallback si no hay terminal interactiva (ej: piping de comandos o pruebas)
+    if not sys.stdin.isatty():
+        resp = input(prompt).strip()
+        if not resp and default:
+            return default
+        # Coincidencia directa o parcial
+        for opc in opciones:
+            if opc.lower() == resp.lower():
+                return opc
+        inician = [o for o in opciones if o.lower().startswith(resp.lower())]
+        if inician:
+            return inician[0]
+        contienen = [o for o in opciones if resp.lower() in o.lower()]
+        if contienen:
+            return contienen[0]
+        return resp or default
+
+    # En Windows interactivo con msvcrt
+    try:
+        import msvcrt
+        buffer = []
+        matches = list(opciones)
+        tab_index = 0
+
+        print(prompt, end='', flush=True)
+
+        while True:
+            ch = msvcrt.getwch()
+
+            # Enter
+            if ch in ('\r', '\n'):
+                texto = "".join(buffer).strip()
+                print()
+                if not texto:
+                    if default:
+                        return default
+                    if matches:
+                        return matches[0]
+                    continue
+                for opc in opciones:
+                    if opc.lower() == texto.lower():
+                        return opc
+                if matches:
+                    return matches[0]
+                return texto
+
+            # Ctrl+C
+            elif ch == '\x03':
+                print()
+                raise KeyboardInterrupt
+
+            # Backspace
+            elif ch in ('\x08', '\x7f'):
+                if buffer:
+                    buffer.pop()
+                    tab_index = 0
+
+            # Tab: Autocompletar o alternar sugerencias
+            elif ch == '\t':
+                if matches:
+                    seleccion = matches[tab_index % len(matches)]
+                    buffer = list(seleccion)
+                    tab_index += 1
+
+            # Teclas especiales (flechas del teclado)
+            elif ch in ('\x00', '\xe0'):
+                tecla = msvcrt.getwch()
+                if tecla == 'H':  # Flecha Arriba
+                    if matches:
+                        tab_index = (tab_index - 1) % len(matches)
+                        buffer = list(matches[tab_index])
+                elif tecla == 'P':  # Flecha Abajo
+                    if matches:
+                        tab_index = (tab_index + 1) % len(matches)
+                        buffer = list(matches[tab_index])
+                continue
+
+            # Caracteres imprimibles
+            elif ch.isprintable():
+                buffer.append(ch)
+                tab_index = 0
+
+            # Recalcular coincidencias en tiempo real
+            curr_text = "".join(buffer).lower()
+            if curr_text:
+                inician = [o for o in opciones if o.lower().startswith(curr_text)]
+                contienen = [o for o in opciones if curr_text in o.lower() and o not in inician]
+                matches = inician + contienen
+            else:
+                matches = list(opciones)
+
+            # Redibujar la línea con sugerencias dinámicas
+            linea = f"\r{prompt}{''.join(buffer)}"
+            if matches and curr_text:
+                sugs = " | ".join(matches[:4])
+                if len(matches) > 4:
+                    sugs += f" (+{len(matches)-4} más)"
+                linea += f"  \033[90m[TAB: {sugs}]\033[0m"
+
+            linea_limpia = linea.ljust(95)
+            sys.stdout.write(linea_limpia)
+            sys.stdout.write(f"\r{prompt}{''.join(buffer)}")
+            sys.stdout.flush()
+
+    except Exception:
+        # Fallback genérico con input estándar
+        resp = input(f"{prompt}").strip()
+        if not resp and default:
+            return default
+        for opc in opciones:
+            if opc.lower() == resp.lower():
+                return opc
+        matches = [o for o in opciones if resp.lower() in o.lower()]
+        if matches:
+            return matches[0]
+        return resp
+
 def seleccionar_zona(db: Dict[str, Any], zona_arg: Optional[str] = None) -> tuple[str, Dict[str, Any]]:
     vigencia = db.get("_metadata", {}).get("vigencia_texto", "Octubre 2026")
     def enriquecer(p: Dict[str, Any]) -> Dict[str, Any]:
@@ -119,7 +241,7 @@ def seleccionar_zona(db: Dict[str, Any], zona_arg: Optional[str] = None) -> tupl
     print("\n" + "="*70)
     print(" 1. SELECCIÓN DE ZONA / COMUNA")
     print("="*70)
-    print("Seleccione una comuna o zona representativa de Chile:")
+    print("Escriba el nombre de su comuna (con autocompletado presione TAB) o elija una opción:")
     comunas_destacadas = [
         "Santiago (Enel RM)",
         "Buin",
@@ -131,43 +253,60 @@ def seleccionar_zona(db: Dict[str, Any], zona_arg: Optional[str] = None) -> tupl
         "Concepción",
         "Temuco",
         "La Serena",
-        "Buscar otra comuna en la base de datos (120+ comunas)",
+        "Buscar otra comuna con autocompletado en vivo (TAB)",
         "Ingresar zona personalizada"
     ]
     
     for idx, c in enumerate(comunas_destacadas, 1):
         print(f"  [{idx:2d}] {c}")
-    
-    opc = pedir_int("Seleccione una opción", default=1, minimo=1, maximo=len(comunas_destacadas))
-    
-    if opc <= 10:
-        c_sel = comunas_destacadas[opc - 1]
-        if c_sel in db:
-            return c_sel, enriquecer(db[c_sel])
-        # Buscar en db si existe sin paréntesis
-        for k, v in db.items():
-            if k == "_metadata": continue
-            if c_sel.split()[0].lower() in k.lower():
-                return k, enriquecer(v)
-        return c_sel, enriquecer(DEFAULT_TARIFAS)
-    
-    elif opc == 11:
-        # Búsqueda en db
-        while True:
-            busq = input("\nIngrese nombre o parte de la comuna a buscar: ").strip().lower()
-            coincidencias = [k for k in db.keys() if k != "_metadata" and busq in k.lower()]
-            if not coincidencias:
-                print("  [!] No se encontraron comunas con ese texto. Intente nuevamente.")
-                continue
-            print(f"\nCoincidencias encontradas ({len(coincidencias)}):")
-            for i, c in enumerate(coincidencias[:15], 1):
-                print(f"  [{i:2d}] {c} ({db[c].get('empresa', 'Distribuidora')})")
-            elec = pedir_int("Seleccione la comuna deseada", default=1, minimo=1, maximo=min(len(coincidencias), 15))
-            c_sel = coincidencias[elec - 1]
-            return c_sel, enriquecer(db[c_sel])
-    else:
-        nombre = input("Ingrese el nombre de su zona/comuna: ").strip() or "Zona Personalizada"
-        return nombre, enriquecer(DEFAULT_TARIFAS)
+
+    todas_las_comunas = [k for k in sorted(db.keys()) if k != "_metadata"]
+    # Poner las opciones destacadas al inicio de la lista de autocompletado
+    lista_autocompletado = comunas_destacadas[:10] + [c for c in todas_las_comunas if c not in comunas_destacadas[:10]]
+
+    entrada = input_con_autocompletado(
+        lista_autocompletado,
+        prompt="\nComuna o N° [1]: ",
+        default="1"
+    ).strip()
+
+    # Si el usuario ingresó un número del menú
+    if entrada.isdigit():
+        num = int(entrada)
+        if 1 <= num <= 10:
+            c_sel = comunas_destacadas[num - 1]
+            if c_sel in db:
+                return c_sel, enriquecer(db[c_sel])
+            for k, v in db.items():
+                if k == "_metadata": continue
+                if c_sel.split()[0].lower() in k.lower():
+                    return k, enriquecer(v)
+            return c_sel, enriquecer(DEFAULT_TARIFAS)
+        elif num == 11:
+            print("\n  [Modo Autocompletado Activo - Escriba letras y presione TAB para autocompletar]")
+            c_sel = input_con_autocompletado(todas_las_comunas, prompt="Comuna (TAB para autocompletar): ", default="Santiago (Enel RM)")
+            if c_sel in db:
+                return c_sel, enriquecer(db[c_sel])
+            for k, v in db.items():
+                if k == "_metadata": continue
+                if c_sel.lower() in k.lower():
+                    return k, enriquecer(v)
+            return c_sel, enriquecer(DEFAULT_TARIFAS)
+        elif num == 12:
+            nombre = input("Ingrese el nombre de su zona/comuna: ").strip() or "Zona Personalizada"
+            return nombre, enriquecer(DEFAULT_TARIFAS)
+
+    # Si el usuario escribió directamente el nombre (o usó TAB)
+    for k, v in db.items():
+        if k == "_metadata": continue
+        if k.lower() == entrada.lower():
+            return k, enriquecer(v)
+    for k, v in db.items():
+        if k == "_metadata": continue
+        if entrada.lower() in k.lower():
+            return k, enriquecer(v)
+
+    return entrada, enriquecer(DEFAULT_TARIFAS)
 
 def seleccionar_tarifa(tarifa_arg: Optional[str] = None) -> str:
     tarifas_disponibles = {
