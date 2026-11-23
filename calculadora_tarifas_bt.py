@@ -320,40 +320,42 @@ def mostrar_precios_tarifa(zona_nombre: str, parametros: Dict[str, Any], tarifa:
 
     transmision_unit = parametros.get("transmision", 29.50)
     serv_publico_unit = parametros.get("serv_publico", 0.855)
-    inyeccion_unit = parametros.get("inyeccion_bt", 103.50)
+    inyeccion_base_sin_iva = parametros.get("inyeccion_bt", 103.50)
+    inyeccion_unit_con_iva = inyeccion_base_sin_iva * 1.19
     total_kwh_variable = energia_unit + transmision_unit + serv_publico_unit
 
     sector_str = f" | Sector: {sector}" if sector else ""
     print("\n" + "-"*70)
     print(f" PRECIOS VIGENTES PARA: {zona_nombre.upper()} ({empresa}{sector_str})")
-    print(f" Tarifa: {tarifa} | Vigencia: {vigencia}")
+    print(f" Tarifa: {tarifa} | Vigencia: {vigencia} (Valores con IVA 19% incluido)")
     print("-"*70)
-    print(" [A] Cargos de Consumo (Valores con IVA 19%, salvo Serv. Público):")
+    print(" [A] Precios de Compra / Consumo de Energía (con IVA 19%):")
     print(f"   * Cargo Fijo Mensual                        : ${cargo_fijo:,.2f} /mes")
-    print(f"   * Cargo por Energía Consumida               : ${energia_unit:,.3f} /kWh")
+    print(f"   * Precio Compra de Energía (con IVA)        : ${energia_unit:,.3f} /kWh")
     print(f"   * Cargo por Uso del Sistema de Transmisión  : ${transmision_unit:,.3f} /kWh")
-    print(f"   * Cargo por Servicio Público (exento IVA)   : ${serv_publico_unit:,.3f} /kWh")
+    print(f"   * Cargo por Servicio Público                : ${serv_publico_unit:,.3f} /kWh")
     print(f"   -> Costo Variable Total por kWh Consumido   : ${total_kwh_variable:,.3f} /kWh")
 
     if tarifa == "BT2":
         pot_fuera = parametros.get("potencia_fuera_punta_bt2_bt3", 17985.5)
-        print(f"   * Cargo por Potencia Contratada             : ${pot_fuera:,.1f} /kW/mes")
+        print(f"   * Cargo por Potencia Contratada (con IVA)   : ${pot_fuera:,.1f} /kW/mes")
     elif tarifa == "BT3":
         pot_punta = parametros.get("potencia_punta_bt2_bt3", 25744.3)
-        print(f"   * Cargo por Demanda Máxima Leída            : ${pot_punta:,.1f} /kW/mes")
+        print(f"   * Cargo por Demanda Máxima Leída (con IVA)  : ${pot_punta:,.1f} /kW/mes")
     elif tarifa in ["BT4.1", "BT4.2"]:
         pot_punta = parametros.get("potencia_punta_bt4", 20416.6)
         pot_fuera = parametros.get("potencia_demanda_bt4", 5327.7)
-        print(f"   * Cargo por Potencia en Horas de Punta      : ${pot_punta:,.1f} /kW/mes")
-        print(f"   * Cargo por Potencia Fuera de Punta         : ${pot_fuera:,.1f} /kW/mes")
+        print(f"   * Cargo por Potencia en Horas Punta (IVA)   : ${pot_punta:,.1f} /kW/mes")
+        print(f"   * Cargo por Potencia Fuera de Punta (IVA)   : ${pot_fuera:,.1f} /kW/mes")
     elif tarifa == "BT4.3":
         pot_punta = parametros.get("potencia_punta_bt4", 20416.6)
         pot_sum = parametros.get("potencia_demanda_bt4", 5327.7)
-        print(f"   * Cargo por Demanda Leída en Horas de Punta : ${pot_punta:,.1f} /kW/mes")
-        print(f"   * Cargo por Demanda Máxima Suministrada     : ${pot_sum:,.1f} /kW/mes")
+        print(f"   * Cargo Demanda Leída Horas Punta (con IVA) : ${pot_punta:,.1f} /kW/mes")
+        print(f"   * Cargo Demanda Máx. Suministrada (con IVA) : ${pot_sum:,.1f} /kW/mes")
 
-    print("\n [B] Precio de Inyección de Energía (NetBilling - Ley 20.571):")
-    print(f"   * Valorización de Inyección en BT (sin IVA) : ${inyeccion_unit:,.3f} /kWh")
+    print("\n [B] Precio de Venta / Inyección de Energía (con IVA 19%):")
+    print(f"   * Precio Venta / Inyección en BT (con IVA)  : ${inyeccion_unit_con_iva:,.3f} /kWh")
+    print(f"     (Valor base pliego sin IVA: ${inyeccion_base_sin_iva:,.3f} /kWh)")
     print("-"*70)
 
 def solicitar_variables(tarifa: str) -> Dict[str, float]:
@@ -408,12 +410,25 @@ def calcular_facturacion(zona_nombre: str, parametros: Dict[str, Any], tarifa: s
     consumo_kwh = variables.get("consumo_kwh", 0.0)
     inyeccion_kwh = variables.get("inyeccion_kwh", 0.0)
     
-    # Parámetros tarifarios
-    cargo_fijo = parametros.get("cargo_fijo_bt1", 1150.0)
+    # Parámetros tarifarios (con IVA 19% incluido)
+    if tarifa == "BT1":
+        cargo_fijo = parametros.get("cargo_fijo_bt1", 1150.0)
+        energia_unit = parametros.get("energia_bt1", 155.00)
+    elif tarifa == "BT2":
+        cargo_fijo = parametros.get("cargo_fijo_bt2", parametros.get("cargo_fijo_bt1", 1150.0))
+        energia_unit = parametros.get("energia_bt2_bt3", parametros.get("energia_bt1", 155.00))
+    elif tarifa == "BT3":
+        cargo_fijo = parametros.get("cargo_fijo_bt3", parametros.get("cargo_fijo_bt1", 1150.0))
+        energia_unit = parametros.get("energia_bt2_bt3", parametros.get("energia_bt1", 155.00))
+    else:
+        cargo_fijo = parametros.get("cargo_fijo_bt4", parametros.get("cargo_fijo_bt1", 1150.0))
+        energia_unit = parametros.get("energia_bt4", parametros.get("energia_bt1", 155.00))
+
     transmision_unit = parametros.get("transmision", 29.50)
     serv_publico_unit = parametros.get("serv_publico", 0.855)
-    energia_unit = parametros.get("energia_bt1", 155.00)
-    inyeccion_unit = parametros.get("inyeccion_bt", 103.50)
+    # Precio de venta / inyección de energía incluyendo IVA (19%)
+    inyeccion_base_sin_iva = parametros.get("inyeccion_bt", 103.50)
+    inyeccion_unit = inyeccion_base_sin_iva * 1.19
     
     # 1. Cargos de Energía y Transmisión
     costo_transmision = consumo_kwh * transmision_unit
@@ -480,8 +495,7 @@ def calcular_facturacion(zona_nombre: str, parametros: Dict[str, Any], tarifa: s
     total_consumo = (cargo_fijo + costo_transmision + costo_serv_publico + 
                      costo_energia_base + costo_sobreconsumo_invierno + costo_potencia)
 
-    # 2. Inyección de Energía (NetBilling - Ley 20.571)
-    # Por ley (Art 149 quinquies DFL 4), la remuneración de inyecciones residenciales NO está afecta a IVA
+    # 2. Inyección / Venta de Energía (incluyendo IVA 19%)
     total_inyeccion = inyeccion_kwh * inyeccion_unit
 
     # 3. Balance Neto
@@ -510,6 +524,7 @@ def calcular_facturacion(zona_nombre: str, parametros: Dict[str, Any], tarifa: s
         "total_consumo": total_consumo,
         "inyeccion_kwh": inyeccion_kwh,
         "precio_inyeccion_unit": inyeccion_unit,
+        "precio_inyeccion_sin_iva": inyeccion_base_sin_iva,
         "total_inyeccion": total_inyeccion,
         "balance_neto": balance_neto
     }
@@ -526,12 +541,12 @@ def imprimir_reporte(res: Dict[str, Any]):
     if res['inyeccion_kwh'] > 0:
         print(f" Inyección Solar   : {res['inyeccion_kwh']:.2f} kWh (NetBilling)")
     print("-" * 70)
-    print(" 1. DESGLOSE DEL GASTO EN CONSUMO DE ENERGÍA")
+    print(" 1. DESGLOSE DEL GASTO EN COMPRA / CONSUMO DE ENERGÍA (con IVA 19%)")
     print("-" * 70)
     print(f"  * Cargo Fijo Mensual                       : {formatear_clp(res['cargo_fijo'])}")
     print(f"  * Cargo por Transmisión                    : {formatear_clp(res['costo_transmision'])}")
     print(f"  * Cargo por Servicio Público               : {formatear_clp(res['costo_serv_publico'])}")
-    print(f"  * Cargo por Energía Consumida              : {formatear_clp(res['costo_energia_base'])}")
+    print(f"  * Cargo por Compra de Energía (con IVA)    : {formatear_clp(res['costo_energia_base'])}")
     if res['costo_sobreconsumo_invierno'] > 0:
         print(f"  * Recargo Límite de Invierno (Sobreconsumo): {formatear_clp(res['costo_sobreconsumo_invierno'])}")
     if res['costo_potencia'] > 0:
@@ -541,12 +556,12 @@ def imprimir_reporte(res: Dict[str, Any]):
     print(f"  >> TOTAL A PAGAR POR CONSUMO (con IVA)    : {formatear_clp(res['total_consumo'])}")
 
     print("\n" + "-" * 70)
-    print(" 2. LIQUIDACIÓN POR INYECCIÓN DE ENERGÍA (Ley 20.571 NetBilling)")
+    print(" 2. LIQUIDACIÓN POR VENTA / INYECCIÓN DE ENERGÍA (con IVA 19%)")
     print("-" * 70)
     if res['inyeccion_kwh'] > 0:
         print(f"  * Energía Inyectada a la Red               : {res['inyeccion_kwh']:.2f} kWh")
-        print(f"  * Precio de Inyección Regulado (sin IVA)   : ${res['precio_inyeccion_unit']:.3f} /kWh")
-        print(f"  >> TOTAL ABONADO POR DISTRIBUIDORA         : {formatear_clp(res['total_inyeccion'])}")
+        print(f"  * Precio Venta / Inyección (con IVA 19%)   : ${res['precio_inyeccion_unit']:.3f} /kWh")
+        print(f"  >> TOTAL ABONADO POR DISTRIBUIDORA (IVA)  : {formatear_clp(res['total_inyeccion'])}")
     else:
         print("  * No se registraron inyecciones a la red en el periodo (0 kWh).")
         print("  >> TOTAL ABONADO                           : $0")
