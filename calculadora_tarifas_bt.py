@@ -370,7 +370,8 @@ def solicitar_variables(tarifa: str) -> Dict[str, float]:
     # Variables específicas por tarifa
     if tarifa == "BT1":
         print("\n  [Configuración de Invierno - Límite de Invierno]")
-        mes = pedir_int("Mes de facturación (1=Enero, ..., 12=Diciembre)", default=10, minimo=1, maximo=12)
+        mes_actual = datetime.now().month
+        mes = pedir_int("Mes de facturación (1=Enero, ..., 12=Diciembre)", default=mes_actual, minimo=1, maximo=12)
         datos["mes"] = mes
         es_invierno = mes in [5, 6, 7, 8, 9] # Mayo a Septiembre
         datos["es_invierno"] = es_invierno
@@ -590,7 +591,7 @@ def main():
     parser.add_argument("--tarifa", type=str, choices=["BT1", "BT2", "BT3", "BT4.1", "BT4.2", "BT4.3"], help="Opción tarifaria")
     parser.add_argument("--consumo", type=float, help="Consumo de energía mensual en kWh")
     parser.add_argument("--inyeccion", type=float, default=0.0, help="Inyección de energía a la red en kWh")
-    parser.add_argument("--mes", type=int, default=10, help="Mes de facturación (1-12) para evaluar invierno en BT1")
+    parser.add_argument("--mes", type=int, default=None, help="Mes de facturación (1-12) para evaluar invierno en BT1")
     parser.add_argument("--limite-invierno", type=float, default=0.0, help="Límite de invierno en kWh si aplica")
     parser.add_argument("--potencia", type=float, help="Potencia contratada o leída en kW para BT2/BT3")
     parser.add_argument("--potencia-punta", type=float, help="Potencia en horas punta para BT4 (kW)")
@@ -599,18 +600,19 @@ def main():
 
     args = parser.parse_args()
     
-    # Cargar o actualizar automáticamente según el mes en ejecución
+    # Cargar o actualizar automáticamente según el mes actual en ejecución
     db = cargar_base_datos(mes_objetivo=args.mes, forzar=args.actualizar)
 
     # Si se especificaron los argumentos mínimos requeridos, corre en modo silencioso/directo
     if args.zona and args.tarifa and (args.consumo is not None):
         zona_nombre, params = seleccionar_zona(db, args.zona)
         mostrar_precios_tarifa(zona_nombre, params, args.tarifa)
+        mes_calculo = args.mes if args.mes is not None else datetime.now().month
         variables = {
             "consumo_kwh": args.consumo,
             "inyeccion_kwh": args.inyeccion,
-            "mes": args.mes,
-            "es_invierno": args.mes in [5, 6, 7, 8, 9],
+            "mes": mes_calculo,
+            "es_invierno": mes_calculo in [5, 6, 7, 8, 9],
             "limite_invierno": args.limite_invierno
         }
         if args.tarifa == "BT2":

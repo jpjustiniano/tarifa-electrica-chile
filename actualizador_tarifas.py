@@ -313,8 +313,10 @@ def asegurar_tarifas_al_dia(mes_objetivo: Optional[int] = None, anio_objetivo: O
     # Condición de verificación:
     # 1. Forzar actualización
     # 2. No hay datos locales
-    # 3. La fecha objetivo (o actual) es posterior a la última fecha registrada localmente
-    necesita_verificar = forzar or not db_local or (anio_objetivo > local_anio) or (anio_objetivo == local_anio and mes_objetivo > local_mes)
+    # 3. El mes/año actual del sistema o el solicitado es posterior a la última versión local
+    es_mes_actual_posterior = (ahora.year, ahora.month) > (local_anio, local_mes)
+    es_mes_objetivo_posterior = (anio_objetivo, mes_objetivo) > (local_anio, local_mes)
+    necesita_verificar = forzar or not db_local or es_mes_actual_posterior or es_mes_objetivo_posterior
 
     if necesita_verificar:
         print("\n[*] Verificando en línea la disponibilidad de tarifas actualizadas en CGE / CNE...")
