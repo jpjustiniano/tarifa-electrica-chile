@@ -299,6 +299,63 @@ def seleccionar_tarifa(tarifa_arg: Optional[str] = None) -> str:
     opc = str(pedir_int("Seleccione la opción tarifaria", default=1, minimo=1, maximo=6))
     return tarifas_disponibles[opc][0]
 
+def mostrar_precios_tarifa(zona_nombre: str, parametros: Dict[str, Any], tarifa: str):
+    """Muestra en pantalla los precios unitarios de consumo e inyección para la comuna y tarifa elegidas."""
+    empresa = parametros.get("empresa", "Distribuidora")
+    sector = parametros.get("sector_tarifario", "")
+    vigencia = parametros.get("vigencia_texto", "Octubre 2026")
+
+    if tarifa == "BT1":
+        cargo_fijo = parametros.get("cargo_fijo_bt1", 1150.0)
+        energia_unit = parametros.get("energia_bt1", 155.00)
+    elif tarifa == "BT2":
+        cargo_fijo = parametros.get("cargo_fijo_bt2", parametros.get("cargo_fijo_bt1", 1150.0))
+        energia_unit = parametros.get("energia_bt2_bt3", parametros.get("energia_bt1", 155.00))
+    elif tarifa == "BT3":
+        cargo_fijo = parametros.get("cargo_fijo_bt3", parametros.get("cargo_fijo_bt1", 1150.0))
+        energia_unit = parametros.get("energia_bt2_bt3", parametros.get("energia_bt1", 155.00))
+    else:
+        cargo_fijo = parametros.get("cargo_fijo_bt4", parametros.get("cargo_fijo_bt1", 1150.0))
+        energia_unit = parametros.get("energia_bt4", parametros.get("energia_bt1", 155.00))
+
+    transmision_unit = parametros.get("transmision", 29.50)
+    serv_publico_unit = parametros.get("serv_publico", 0.855)
+    inyeccion_unit = parametros.get("inyeccion_bt", 103.50)
+    total_kwh_variable = energia_unit + transmision_unit + serv_publico_unit
+
+    sector_str = f" | Sector: {sector}" if sector else ""
+    print("\n" + "-"*70)
+    print(f" PRECIOS VIGENTES PARA: {zona_nombre.upper()} ({empresa}{sector_str})")
+    print(f" Tarifa: {tarifa} | Vigencia: {vigencia}")
+    print("-"*70)
+    print(" [A] Cargos de Consumo (Valores con IVA 19%, salvo Serv. Público):")
+    print(f"   * Cargo Fijo Mensual                        : ${cargo_fijo:,.2f} /mes")
+    print(f"   * Cargo por Energía Consumida               : ${energia_unit:,.3f} /kWh")
+    print(f"   * Cargo por Uso del Sistema de Transmisión  : ${transmision_unit:,.3f} /kWh")
+    print(f"   * Cargo por Servicio Público (exento IVA)   : ${serv_publico_unit:,.3f} /kWh")
+    print(f"   -> Costo Variable Total por kWh Consumido   : ${total_kwh_variable:,.3f} /kWh")
+
+    if tarifa == "BT2":
+        pot_fuera = parametros.get("potencia_fuera_punta_bt2_bt3", 17985.5)
+        print(f"   * Cargo por Potencia Contratada             : ${pot_fuera:,.1f} /kW/mes")
+    elif tarifa == "BT3":
+        pot_punta = parametros.get("potencia_punta_bt2_bt3", 25744.3)
+        print(f"   * Cargo por Demanda Máxima Leída            : ${pot_punta:,.1f} /kW/mes")
+    elif tarifa in ["BT4.1", "BT4.2"]:
+        pot_punta = parametros.get("potencia_punta_bt4", 20416.6)
+        pot_fuera = parametros.get("potencia_demanda_bt4", 5327.7)
+        print(f"   * Cargo por Potencia en Horas de Punta      : ${pot_punta:,.1f} /kW/mes")
+        print(f"   * Cargo por Potencia Fuera de Punta         : ${pot_fuera:,.1f} /kW/mes")
+    elif tarifa == "BT4.3":
+        pot_punta = parametros.get("potencia_punta_bt4", 20416.6)
+        pot_sum = parametros.get("potencia_demanda_bt4", 5327.7)
+        print(f"   * Cargo por Demanda Leída en Horas de Punta : ${pot_punta:,.1f} /kW/mes")
+        print(f"   * Cargo por Demanda Máxima Suministrada     : ${pot_sum:,.1f} /kW/mes")
+
+    print("\n [B] Precio de Inyección de Energía (NetBilling - Ley 20.571):")
+    print(f"   * Valorización de Inyección en BT (sin IVA) : ${inyeccion_unit:,.3f} /kWh")
+    print("-"*70)
+
 def solicitar_variables(tarifa: str) -> Dict[str, float]:
     print("\n" + "="*70)
     print(f" 3. VARIABLES DE CONSUMO E INYECCIÓN - TARIFA {tarifa}")
@@ -533,6 +590,7 @@ def main():
     # Si se especificaron los argumentos mínimos requeridos, corre en modo silencioso/directo
     if args.zona and args.tarifa and (args.consumo is not None):
         zona_nombre, params = seleccionar_zona(db, args.zona)
+        mostrar_precios_tarifa(zona_nombre, params, args.tarifa)
         variables = {
             "consumo_kwh": args.consumo,
             "inyeccion_kwh": args.inyeccion,
@@ -561,6 +619,7 @@ def main():
 
     zona_nombre, params = seleccionar_zona(db)
     tarifa = seleccionar_tarifa()
+    mostrar_precios_tarifa(zona_nombre, params, tarifa)
     variables = solicitar_variables(tarifa)
 
     res = calcular_facturacion(zona_nombre, params, tarifa, variables)
