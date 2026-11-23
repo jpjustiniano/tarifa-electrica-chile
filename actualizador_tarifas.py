@@ -138,61 +138,114 @@ def descargar_pdf(url: str, destino_path: str) -> bool:
     return True
 
 def procesar_pliego_pdf(pdf_path: str, anio: int, mes: int, url_fuente: str) -> Dict[str, Any]:
-    """Extrae las tarifas de comunas desde el PDF descargado y genera el diccionario de datos."""
+    """Extrae las tarifas de todas las comunas y empresas distribuidoras desde el PDF descargado."""
     if not pypdf:
         raise ImportError("Se requiere la biblioteca pypdf para procesar el pliego.")
 
     reader = pypdf.PdfReader(pdf_path)
     pages = [p.extract_text() or "" for p in reader.pages]
 
-    # 1. Inyecciones de energía (NetBilling) típicamente en página 10 o penúltimas páginas
+    patron_fila = re.compile(
+        r'^(CGE DISTRIBUCI[ÓO]N|CONAFE|EMELAT|ELECDA|ELIQSA|EMELARI)\s+(.+?)\s*(STx[\w\-]+)\s+(Aéreo|Subt\.\d)\s+(.+)$'
+    )
+
+    # 1. Extraer inyecciones de energía (NetBilling) en las páginas finales (típicamente páginas 10, 11 y 12)
     injections = {}
-    for p_idx in [9, 8, 10, 7]:
-        if p_idx < len(pages):
-            for l in pages[p_idx].splitlines():
-                m = re.search(r'CGE DISTRIBUCI[ÓO]N\s+([A-Za-záéíóúÁÉÍÓÚñÑ\s]+?)\s+STx[\w\-]+\s+(\w+)\s+(.+)', l)
+    for p_idx in range(len(pages) - 1, -1, -1):
+        p_txt = pages[p_idx]
+        if "Inyección Energía" in p_txt or "149 bis" in p_txt or p_idx in [9, 10, 11]:
+            for l in p_txt.splitlines():
+                m = patron_fila.match(l.strip())
                 if m:
-                    cname = m.group(1).strip()
-                    tokens = m.group(3).strip().split()
+                    emp, cname, stx, tipo, rest = m.groups()
+                    cname = cname.strip()
+                    emp_norm = "CGE" if "CGE" in emp else emp.strip()
+                    tokens = rest.strip().split()
                     if len(tokens) >= 2:
                         bt_inj = parse_num_chileno(tokens[-2])
                         at_inj = parse_num_chileno(tokens[-1])
                         if bt_inj > 0:
-                            injections[cname] = {"bt_inj": bt_inj, "at_inj": at_inj}
-            if len(injections) > 20:
-                break
+                            key = (emp_norm, cname)
+                            if key not in injections or tipo == "Aéreo":
+                                injections[key] = {"bt_inj": bt_inj, "at_inj": at_inj}
+
+    # Contar en cuántas empresas aparece cada comuna (ej. Freirina en CONAFE y EMELAT)
+    comunas_por_empresa = {}
+    for p_idx in [0, 1, 2]:
+        if p_idx < len(pages):
+            for l in pages[p_idx].splitlines():
+                m = patron_fila.match(l.strip())
+                if m:
+                    emp, cname, _, _, _ = m.groups()
+                    cname = cname.strip()
+                    emp_norm = "CGE" if "CGE" in emp else emp.strip()
+                    comunas_por_empresa.setdefault(cname, set()).add(emp_norm)
 
     commune_data = {}
-    # 2. Tarifas BT1, BT2-3, BT4 en página 1 o 4
-    if len(pages) > 0:
-        for l in pages[0].splitlines():
-            m = re.search(r'CGE DISTRIBUCI[ÓO]N\s+([A-Za-záéíóúÁÉÍÓÚñÑ\s]+?)\s+STx[\w\-]+\s+(\w+)\s+(.+)', l)
-            if m:
-                cname = m.group(1).strip()
-                tokens = m.group(3).strip().split()
-                if len(tokens) >= 15:
-                    cargo_fijo_bt1 = parse_num_chileno(tokens[0])
-                    transmision = parse_num_chileno(tokens[1])
-                    serv_publico = parse_num_chileno(tokens[2])
-                    energia_bt1 = parse_num_chileno(tokens[7])
+    # 2. Extraer Tarifas BT1, BT2-3, BT4 en páginas 1, 2 y 3
+    for p_idx in [0, 1, 2]:
+        if p_idx < len(pages):
+            for l in pages[p_idx].splitlines():
+                m = patron_fila.match(l.strip())
+                if m:
+                    emp, cname, stx, tipo, rest = m.groups()
+                    cname = cname.strip()
+                    emp_norm = "CGE" if "CGE" in emp else emp.strip()
+                    tokens = rest.strip().split()
+                    if len(tokens) >= 38:
+                        # Si la comuna existe en más de una empresa distribuidora, distinguirla
+                        if len(comunas_por_empresa.get(cname, set())) > 1:
+                            clave_comuna = f"{cname} ({emp_norm})"
+                        else:
+                            clave_comuna = cname
 
-                    inj = injections.get(cname, {"bt_inj": 105.74, "at_inj": 97.036})
+                        # Priorizar tarifa Aéreo como estándar comunal (no sobrescribir Aéreo con Subt.x)
+                        if clave_comuna in commune_data and tipo != "Aéreo":
+                            continue
 
-                    commune_data[cname] = {
-                        "empresa": "CGE",
-                        "cargo_fijo_bt1": cargo_fijo_bt1,
-                        "transmision": transmision,
-                        "serv_publico": serv_publico,
-                        "energia_bt1": energia_bt1,
-                        "potencia_punta_bt2_bt3": 25744.3,
-                        "potencia_fuera_punta_bt2_bt3": 17985.5,
-                        "cargo_fijo_bt4": cargo_fijo_bt1,
-                        "potencia_punta_bt4": 20416.6,
-                        "potencia_demanda_bt4": 5327.7,
-                        "inyeccion_bt": inj["bt_inj"]
-                    }
+                        cargo_fijo_bt1 = parse_num_chileno(tokens[0])
+                        transmision = parse_num_chileno(tokens[1])
+                        serv_publico = parse_num_chileno(tokens[2])
+                        energia_bt1 = parse_num_chileno(tokens[7])
+                        compras_potencia_bt1 = parse_num_chileno(tokens[8])
+                        potencia_base_dist_bt1 = parse_num_chileno(tokens[9])
 
-    # Conservar referencias como Santiago Enel RM y Valparaíso Chilquinta
+                        cargo_fijo_bt2 = parse_num_chileno(tokens[15])
+                        cargo_fijo_bt3 = parse_num_chileno(tokens[16])
+                        energia_bt2_bt3 = parse_num_chileno(tokens[23])
+                        potencia_punta_bt2_bt3 = parse_num_chileno(tokens[24])
+                        potencia_fuera_punta_bt2_bt3 = parse_num_chileno(tokens[25])
+
+                        cargo_fijo_bt4 = parse_num_chileno(tokens[26])
+                        energia_bt4 = parse_num_chileno(tokens[35])
+                        potencia_demanda_bt4 = parse_num_chileno(tokens[36])
+                        potencia_punta_bt4 = parse_num_chileno(tokens[37])
+
+                        inj = injections.get((emp_norm, cname), {"bt_inj": 105.74, "at_inj": 97.036})
+
+                        commune_data[clave_comuna] = {
+                            "empresa": emp_norm,
+                            "sector_tarifario": stx,
+                            "tipo_red": tipo,
+                            "cargo_fijo_bt1": cargo_fijo_bt1,
+                            "transmision": transmision,
+                            "serv_publico": serv_publico,
+                            "energia_bt1": energia_bt1,
+                            "compras_potencia_bt1": compras_potencia_bt1,
+                            "potencia_base_dist_bt1": potencia_base_dist_bt1,
+                            "cargo_fijo_bt2": cargo_fijo_bt2,
+                            "cargo_fijo_bt3": cargo_fijo_bt3,
+                            "energia_bt2_bt3": energia_bt2_bt3,
+                            "potencia_punta_bt2_bt3": potencia_punta_bt2_bt3,
+                            "potencia_fuera_punta_bt2_bt3": potencia_fuera_punta_bt2_bt3,
+                            "cargo_fijo_bt4": cargo_fijo_bt4,
+                            "energia_bt4": energia_bt4,
+                            "potencia_punta_bt4": potencia_punta_bt4,
+                            "potencia_demanda_bt4": potencia_demanda_bt4,
+                            "inyeccion_bt": inj["bt_inj"]
+                        }
+
+    # Conservar referencias adicionales de otras distribuidoras (Enel RM y Chilquinta)
     commune_data["Santiago (Enel RM)"] = {
         "empresa": "Enel Distribución",
         "cargo_fijo_bt1": 1180.50,
