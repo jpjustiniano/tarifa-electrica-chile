@@ -123,8 +123,7 @@ def leer_entrada_usuario(prompt_text: str, default: str = "", completer=None) ->
                 prompt_text,
                 completer=completer,
                 complete_while_typing=bool(completer),
-                style=estilo,
-                default=default
+                style=estilo
             ).strip()
 
             if texto.lower() in COMANDOS_SALIDA:
