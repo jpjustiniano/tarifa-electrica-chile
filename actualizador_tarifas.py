@@ -42,7 +42,11 @@ except ImportError:
 
 BASE_DIR = os.path.dirname(__file__)
 INF_DIR = os.path.join(BASE_DIR, "informacion_tarifas")
+os.makedirs(INF_DIR, exist_ok=True)
 DB_FILE = os.path.join(INF_DIR, "datos_tarifarios_bt.json")
+ROOT_DB_FILE = os.path.join(BASE_DIR, "datos_tarifarios_bt.json")
+if not os.path.exists(DB_FILE) and os.path.exists(ROOT_DB_FILE):
+    DB_FILE = ROOT_DB_FILE
 
 CGE_TARIFAS_URL = "https://www.cge.cl/informacion-comercial/tarifas-y-procesos-tarifarios/tarifa-de-suministro/"
 

@@ -55,9 +55,7 @@ def cerrar_programa():
 COMANDOS_SALIDA = {"salir", "exit", "quit", "q", "esc"}
 
 from datetime import datetime
-from actualizador_tarifas import asegurar_tarifas_al_dia, obtener_metadatos_locales
-
-DB_FILE = os.path.join(os.path.dirname(__file__), "informacion_tarifas", "datos_tarifarios_bt.json")
+from actualizador_tarifas import asegurar_tarifas_al_dia, obtener_metadatos_locales, DB_FILE
 
 # Valores promedio de referencia por defecto si no se encuentra la comuna
 DEFAULT_TARIFAS = {
