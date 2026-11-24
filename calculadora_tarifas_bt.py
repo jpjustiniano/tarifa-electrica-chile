@@ -31,14 +31,28 @@ if sys.stdout.encoding and sys.stdout.encoding.lower() != 'utf-8':
     except Exception:
         pass
 
-# Importar prompt_toolkit para autocompletado profesional de terminal
+# Importar prompt_toolkit para autocompletado profesional de terminal y captura de tecla Esc
 try:
-    from prompt_toolkit import prompt as pt_prompt
+    from prompt_toolkit import PromptSession
     from prompt_toolkit.completion import WordCompleter, FuzzyCompleter
+    from prompt_toolkit.key_binding import KeyBindings
     from prompt_toolkit.styles import Style as PtStyle
     PT_DISPONIBLE = True
 except ImportError:
     PT_DISPONIBLE = False
+
+class SalidaSolicitada(Exception):
+    """Excepción interna para cerrar el programa limpiamente al presionar Esc o escribir salir."""
+    pass
+
+def cerrar_programa():
+    """Muestra mensaje de despedida y termina la ejecución con código 0."""
+    print("\n" + "="*70)
+    print(" [!] Programa finalizado por el usuario (Esc / Salir). ¡Hasta pronto!")
+    print("="*70 + "\n")
+    sys.exit(0)
+
+COMANDOS_SALIDA = {"salir", "exit", "quit", "q", "esc"}
 
 from datetime import datetime
 from actualizador_tarifas import asegurar_tarifas_al_dia, obtener_metadatos_locales
@@ -78,15 +92,73 @@ def formatear_clp(monto: float) -> str:
     """Formatea un número decimal a formato moneda chilena ($ X.XXX)."""
     return f"${round(monto):,}".replace(",", ".")
 
+def leer_entrada_usuario(prompt_text: str, default: str = "", completer=None) -> str:
+    """
+    Lee una entrada de texto en consola.
+    - Al presionar la tecla 'Esc' (o Ctrl+Q / Ctrl+C), cierra inmediatamente el programa.
+    - Al escribir 'salir', 'exit', 'q' o 'esc', cierra inmediatamente el programa.
+    """
+    if sys.stdin.isatty() and PT_DISPONIBLE:
+        try:
+            kb = KeyBindings()
+
+            @kb.add('escape')
+            def _salir_esc(event):
+                event.app.exit(exception=SalidaSolicitada())
+
+            @kb.add('c-q')
+            def _salir_ctrl_q(event):
+                event.app.exit(exception=SalidaSolicitada())
+
+            estilo = PtStyle.from_dict({
+                'completion-menu.completion': 'bg:#2c3e50 #ecf0f1',
+                'completion-menu.completion.current': 'bg:#2980b9 #ffffff bold',
+                'scrollbar.background': 'bg:#7f8c8d',
+                'scrollbar.button': 'bg:#34495e',
+                'prompt': '#27ae60 bold',
+            })
+
+            session = PromptSession(key_bindings=kb)
+            session.app.ttimeoutlen = 0.05  # Respuesta inmediata al presionar Esc (50 ms)
+
+            texto = session.prompt(
+                prompt_text,
+                completer=completer,
+                complete_while_typing=bool(completer),
+                style=estilo,
+                default=default
+            ).strip()
+
+            if texto.lower() in COMANDOS_SALIDA:
+                cerrar_programa()
+            return texto if texto else default
+
+        except (SalidaSolicitada, KeyboardInterrupt, EOFError):
+            cerrar_programa()
+        except Exception:
+            # Si el entorno no soporta búfer de consola Win32, continúa al modo estándar
+            pass
+
+    # Modo estándar / Pipe
+    try:
+        texto = input(prompt_text).strip()
+    except (KeyboardInterrupt, EOFError):
+        cerrar_programa()
+
+    if texto.lower() in COMANDOS_SALIDA:
+        cerrar_programa()
+    return texto if texto else default
+
 def pedir_float(mensaje: str, default: Optional[float] = None, minimo: float = 0.0) -> float:
     while True:
         prompt = f"{mensaje} "
+        default_str = str(default) if default is not None else ""
         if default is not None:
             prompt += f"[{default}]: "
         else:
             prompt += ": "
         try:
-            val_str = input(prompt).strip()
+            val_str = leer_entrada_usuario(prompt, default="")
             if not val_str and default is not None:
                 return default
             val = float(val_str.replace(",", "."))
@@ -95,9 +167,9 @@ def pedir_float(mensaje: str, default: Optional[float] = None, minimo: float = 0
                 continue
             return val
         except ValueError:
-            print("  [!] Por favor ingrese un número válido.")
+            print("  [!] Por favor ingrese un número válido (o presione 'Esc' / escriba 'salir' para cerrar).")
 
-def pedir_int(mensaje: str, default: Optional[int] = None, minimo: int = 1, maximo: int = 12) -> int:
+def pedir_int(mensaje: str, default: Optional[int] = None, minimo: int = 1, maximo: int = 12, permitir_cero_salir: bool = False) -> int:
     while True:
         prompt = f"{mensaje} "
         if default is not None:
@@ -105,82 +177,42 @@ def pedir_int(mensaje: str, default: Optional[int] = None, minimo: int = 1, maxi
         else:
             prompt += ": "
         try:
-            val_str = input(prompt).strip()
+            val_str = leer_entrada_usuario(prompt, default="")
             if not val_str and default is not None:
                 return default
             val = int(val_str)
+            if permitir_cero_salir and val == 0:
+                cerrar_programa()
             if val < minimo or val > maximo:
                 print(f"  [!] El valor debe estar entre {minimo} y {maximo}.")
                 continue
             return val
         except ValueError:
-            print("  [!] Por favor ingrese un número entero válido.")
+            print("  [!] Por favor ingrese un número entero válido (o presione 'Esc' / escriba 'salir' para cerrar).")
 
 def input_con_autocompletado(opciones: List[str], prompt_text: str = "Comuna: ", default: str = "") -> str:
     """
-    Solicita entrada de texto con autocompletado profesional interactivo en tiempo real (TAB y menú desplegable).
-    Utiliza prompt_toolkit (con FuzzyCompleter) para una experiencia óptima en Windows Terminal, PowerShell y CMD,
-    con fallback tolerante a fallos si el entorno no dispone de búfer de pantalla o en pipes.
+    Solicita entrada de texto con autocompletado profesional interactivo en tiempo real (TAB y menú desplegable)
+    y salida rápida con la tecla 'Esc' o escribiendo 'salir'/'q'.
     """
-    # 1. Modo no interactivo / Pipe
-    if not sys.stdin.isatty():
-        resp = input(prompt_text).strip()
-        if not resp and default:
-            return default
-        for opc in opciones:
-            if opc.lower() == resp.lower():
-                return opc
-        inician = [o for o in opciones if o.lower().startswith(resp.lower())]
-        if inician:
-            return inician[0]
-        contienen = [o for o in opciones if resp.lower() in o.lower()]
-        if contienen:
-            return contienen[0]
-        return resp or default
+    completer = None
+    if PT_DISPONIBLE and sys.stdin.isatty():
+        completer = FuzzyCompleter(WordCompleter(opciones, ignore_case=True, match_middle=True))
+        print("\n  [Tip: Escriba letras para autocompletar con TAB/Flechas | Presione 'Esc' o escriba 'salir' para cerrar]")
 
-    # 2. Modo Interactivo con prompt_toolkit (Recomendado y Profesional)
-    if PT_DISPONIBLE:
-        try:
-            # Estilo moderno para el menú emergente de autocompletado
-            estilo = PtStyle.from_dict({
-                'completion-menu.completion': 'bg:#2c3e50 #ecf0f1',
-                'completion-menu.completion.current': 'bg:#2980b9 #ffffff bold',
-                'scrollbar.background': 'bg:#7f8c8d',
-                'scrollbar.button': 'bg:#34495e',
-                'prompt': '#27ae60 bold',
-            })
-            
-            # FuzzyCompleter permite coincidencia difusa (ej: 'buin', 'stgo', 'colb', 'conce')
-            completer = FuzzyCompleter(WordCompleter(opciones, ignore_case=True, match_middle=True))
-            
-            # Mostrar instrucción amigable
-            print("\n  [Tip: Escriba letras y aparecerá el menú emergente. Presione TAB o Flechas para elegir]")
-            resultado = pt_prompt(
-                prompt_text,
-                completer=completer,
-                complete_while_typing=True,
-                style=estilo,
-                default=default
-            ).strip()
-
-            if not resultado and default:
-                return default
-            return resultado
-        except Exception:
-            # Fallback en caso de terminales sin soporte de búfer de pantalla Win32
-            pass
-
-    # 3. Fallback con input estándar y búsqueda aproximada
-    resp = input(f"{prompt_text}[{default}]: ").strip()
+    resp = leer_entrada_usuario(prompt_text, default=default, completer=completer)
     if not resp and default:
         return default
     for opc in opciones:
         if opc.lower() == resp.lower():
             return opc
-    matches = [o for o in opciones if resp.lower() in o.lower()]
-    if matches:
-        return matches[0]
-    return resp
+    inician = [o for o in opciones if o.lower().startswith(resp.lower())]
+    if inician:
+        return inician[0]
+    contienen = [o for o in opciones if resp.lower() in o.lower()]
+    if contienen:
+        return contienen[0]
+    return resp or default
 
 def seleccionar_zona(db: Dict[str, Any], zona_arg: Optional[str] = None) -> tuple[str, Dict[str, Any]]:
     vigencia = db.get("_metadata", {}).get("vigencia_texto", "Octubre 2026")
@@ -224,6 +256,7 @@ def seleccionar_zona(db: Dict[str, Any], zona_arg: Optional[str] = None) -> tupl
     
     for idx, c in enumerate(comunas_destacadas, 1):
         print(f"  [{idx:2d}] {c}")
+    print("  [ 0] Salir del programa (o presione 'Esc' / escriba 'salir')")
 
     todas_las_comunas = [k for k in sorted(db.keys()) if k != "_metadata"]
     # Poner las opciones destacadas al inicio de la lista de autocompletado
@@ -238,7 +271,9 @@ def seleccionar_zona(db: Dict[str, Any], zona_arg: Optional[str] = None) -> tupl
     # Si el usuario ingresó un número del menú
     if entrada.isdigit():
         num = int(entrada)
-        if 1 <= num <= 10:
+        if num == 0:
+            cerrar_programa()
+        elif 1 <= num <= 10:
             c_sel = comunas_destacadas[num - 1]
             if c_sel in db:
                 return c_sel, enriquecer(db[c_sel])
@@ -258,7 +293,7 @@ def seleccionar_zona(db: Dict[str, Any], zona_arg: Optional[str] = None) -> tupl
                     return k, enriquecer(v)
             return c_sel, enriquecer(DEFAULT_TARIFAS)
         elif num == 12:
-            nombre = input("Ingrese el nombre de su zona/comuna: ").strip() or "Zona Personalizada"
+            nombre = leer_entrada_usuario("Ingrese el nombre de su zona/comuna: ", default="Zona Personalizada")
             return nombre, enriquecer(DEFAULT_TARIFAS)
 
     # Si el usuario escribió directamente el nombre (o usó TAB)
@@ -295,8 +330,9 @@ def seleccionar_tarifa(tarifa_arg: Optional[str] = None) -> str:
     print("="*70)
     for k, (cod, desc) in tarifas_disponibles.items():
         print(f"  [{k}] {cod:6s} : {desc}")
+    print("  [0] Salir del programa (o presione 'Esc' / escriba 'salir')")
     
-    opc = str(pedir_int("Seleccione la opción tarifaria", default=1, minimo=1, maximo=6))
+    opc = str(pedir_int("Seleccione la opción tarifaria", default=1, minimo=1, maximo=6, permitir_cero_salir=True))
     return tarifas_disponibles[opc][0]
 
 def mostrar_precios_tarifa(zona_nombre: str, parametros: Dict[str, Any], tarifa: str):
@@ -632,15 +668,19 @@ def main():
     print("\n" + "#"*70)
     print("   CALCULADORA DE TARIFAS ELÉCTRICAS EN BAJA TENSIÓN Y NETBILLING")
     print("                 Sector Regulado de Distribución - Chile")
+    print("   [Salir en cualquier momento: Presione 'Esc', 'Ctrl+Q' o escriba 'salir']")
     print("#"*70)
 
-    zona_nombre, params = seleccionar_zona(db)
-    tarifa = seleccionar_tarifa()
-    mostrar_precios_tarifa(zona_nombre, params, tarifa)
-    variables = solicitar_variables(tarifa)
+    try:
+        zona_nombre, params = seleccionar_zona(db)
+        tarifa = seleccionar_tarifa()
+        mostrar_precios_tarifa(zona_nombre, params, tarifa)
+        variables = solicitar_variables(tarifa)
 
-    res = calcular_facturacion(zona_nombre, params, tarifa, variables)
-    imprimir_reporte(res)
+        res = calcular_facturacion(zona_nombre, params, tarifa, variables)
+        imprimir_reporte(res)
+    except (SalidaSolicitada, KeyboardInterrupt, EOFError):
+        cerrar_programa()
 
 if __name__ == "__main__":
     main()
